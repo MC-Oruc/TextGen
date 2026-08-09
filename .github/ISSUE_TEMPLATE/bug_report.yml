@@ -1,0 +1,38 @@
+name: Bug report
+description: Report a reproducible TextGen defect.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the observed and expected behavior.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: TextGen and Unreal versions
+      placeholder: TextGen 2.0.0, Unreal Engine 5.7.x
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider or backend
+      options: [llama.cpp CUDA 13, llama.cpp CUDA 12, llama.cpp Vulkan, KoboldCpp, OpenAI, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide minimal steps, logs, and relevant configuration without secrets.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Additional diagnostics
+      description: Include GPU, driver, memory, runtime tag, and effective placement when relevant.

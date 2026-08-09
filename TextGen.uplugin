@@ -1,0 +1,38 @@
+{
+  "FileVersion": 3,
+  "Version": 2,
+  "VersionName": "2.0.0",
+  "FriendlyName": "TextGen",
+  "Description": "Text generation providers with verified on-demand CUDA and Vulkan local inference.",
+  "Category": "Runtime",
+  "CreatedBy": "MC-Oruc",
+  "CreatedByURL": "https://github.com/MC-Oruc",
+  "DocsURL": "https://github.com/MC-Oruc/TextGen",
+  "SupportURL": "https://github.com/MC-Oruc/TextGen/issues",
+  "EngineVersion": "5.7.0",
+  "CanContainContent": false,
+  "IsBetaVersion": false,
+  "Installed": false,
+  "Modules": [
+    {
+      "Name": "TextGen",
+      "Type": "Runtime",
+      "LoadingPhase": "PreDefault"
+    },
+    {
+      "Name": "TextGenEditor",
+      "Type": "Editor",
+      "LoadingPhase": "PostEngineInit"
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "ContentBrowserFileDataSource",
+      "Enabled": true
+    },
+    {
+      "Name": "ProcessRuntime",
+      "Enabled": true
+    }
+  ]
+}
