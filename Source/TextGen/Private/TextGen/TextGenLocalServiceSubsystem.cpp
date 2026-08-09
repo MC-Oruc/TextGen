@@ -20,22 +20,12 @@
 #include "TextGen/TextGenConversationCache.h"
 #include "TextGen/TextGenLog.h"
 #include "TextGen/TextGenProjectSettings.h"
+#include "TextGenLlamacppRuntimePaths.h"
 
 namespace
 {
     const FManagedProcessId ManagedTextGenProcessId(TEXT("TextGen.ManagedLocalServer"));
     constexpr int32 FourGiBClassThresholdMiB = 3840;
-
-    FString BackendDirectoryName(const ETextGenLlamacppBackend Backend)
-    {
-        switch (Backend)
-        {
-        case ETextGenLlamacppBackend::CUDA12: return TEXT("cuda-12.4");
-        case ETextGenLlamacppBackend::Vulkan: return TEXT("vulkan");
-        case ETextGenLlamacppBackend::CUDA13:
-        default: return TEXT("cuda-13.3");
-        }
-    }
 
     FString BackendDevicePrefix(const ETextGenLlamacppBackend Backend)
     {
@@ -678,14 +668,12 @@ bool UTextGenLocalServiceSubsystem::ResolveExecutable(const FTextGenLlamacppConf
     ETextGenLlamacppBackend FirstRunnableBackend = Config.Backend;
     for (const ETextGenLlamacppBackend Backend : BuildBackendCandidates(Config.Backend))
     {
-        const FString BackendDirectory = BackendDirectoryName(Backend);
-        const FString SavedExecutable = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("TextGen"), TEXT("Runtimes"),
-            TEXT("Llamacpp"), TEXT("Win64"), BackendDirectory, OutTag, TEXT("llama-server.exe"));
-        const FString Candidate = SavedExecutable;
-        if (!FPaths::FileExists(Candidate))
+        FString RuntimeDirectory;
+        if (!TextGenLlamacppRuntimePaths::ResolveRuntimeDirectory(OutTag, Backend, RuntimeDirectory))
         {
             continue;
         }
+        const FString Candidate = FPaths::Combine(RuntimeDirectory, TEXT("llama-server.exe"));
         if (FirstRunnableExecutable.IsEmpty())
         {
             FirstRunnableExecutable = Candidate;

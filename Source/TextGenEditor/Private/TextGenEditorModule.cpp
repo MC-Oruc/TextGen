@@ -98,8 +98,24 @@ void FTextGenEditorModule::StartRuntimeBootstrap()
     UTextGenRuntimeInstallerSubsystem* Installer =
         GEngine->GetEngineSubsystem<UTextGenRuntimeInstallerSubsystem>();
     const FTextGenLlamacppConfig& Config = GetDefault<UTextGenProjectSettings>()->DevelopmentDefaults;
-    if (!Installer || Config.RuntimeTag.IsEmpty()
-        || Installer->IsRuntimeInstalled(Config.RuntimeTag, Config.Backend))
+    if (!Installer || Config.RuntimeTag.IsEmpty())
+    {
+        return;
+    }
+
+    RuntimeBootstrapTag = Config.RuntimeTag;
+    RuntimeBootstrapBackends = {
+        ETextGenLlamacppBackend::CUDA13,
+        ETextGenLlamacppBackend::CUDA12,
+        ETextGenLlamacppBackend::Vulkan
+    };
+    RuntimeBootstrapBackendIndex = 0;
+    const bool bRequiresPreparation = RuntimeBootstrapBackends.ContainsByPredicate(
+        [Installer, this](const ETextGenLlamacppBackend Backend)
+        {
+            return !Installer->IsRuntimeInstalled(RuntimeBootstrapTag, Backend);
+        });
+    if (!bRequiresPreparation)
     {
         return;
     }
@@ -110,19 +126,46 @@ void FTextGenEditorModule::StartRuntimeBootstrap()
         this, &FTextGenEditorModule::HandleRuntimeInstallComplete);
 
     FNotificationInfo NotificationInfo(LOCTEXT(
-        "RuntimeBootstrapStarted", "Installing the configured llama.cpp runtime..."));
+        "RuntimeBootstrapStarted", "Preparing distributable llama.cpp runtimes..."));
     NotificationInfo.bFireAndForget = false;
     NotificationInfo.bUseThrobber = true;
     RuntimeInstallNotification = FSlateNotificationManager::Get().AddNotification(NotificationInfo);
-    RuntimeBootstrapTag = Config.RuntimeTag;
-    RuntimeBootstrapBackend = Config.Backend;
-    const ETextGenLlamacppInstallComponent Component = Config.Backend != ETextGenLlamacppBackend::Vulkan
-        && !Installer->AreCudaDependenciesInstalled(Config.Backend)
-        ? ETextGenLlamacppInstallComponent::CudaDependencies
-        : ETextGenLlamacppInstallComponent::Runtime;
-    if (!Installer->IsInstalling() && !Installer->InstallExact(Config.RuntimeTag, Config.Backend, Component))
+    ContinueRuntimeBootstrap();
+}
+
+void FTextGenEditorModule::ContinueRuntimeBootstrap()
+{
+    UTextGenRuntimeInstallerSubsystem* Installer = GEngine
+        ? GEngine->GetEngineSubsystem<UTextGenRuntimeInstallerSubsystem>() : nullptr;
+    if (!Installer)
     {
-        HandleRuntimeInstallComplete(false, FString(), Config.Backend, Component,
+        FinishRuntimeBootstrap(false,
+            LOCTEXT("RuntimeBootstrapUnavailable", "The llama.cpp runtime installer is unavailable."));
+        return;
+    }
+    while (RuntimeBootstrapBackends.IsValidIndex(RuntimeBootstrapBackendIndex)
+        && Installer->IsRuntimeInstalled(
+            RuntimeBootstrapTag, RuntimeBootstrapBackends[RuntimeBootstrapBackendIndex]))
+    {
+        ++RuntimeBootstrapBackendIndex;
+    }
+    if (!RuntimeBootstrapBackends.IsValidIndex(RuntimeBootstrapBackendIndex))
+    {
+        FinishRuntimeBootstrap(true,
+            LOCTEXT("RuntimeBootstrapComplete", "Distributable llama.cpp runtimes are ready."));
+        return;
+    }
+
+    RuntimeBootstrapBackend = RuntimeBootstrapBackends[RuntimeBootstrapBackendIndex];
+    const ETextGenLlamacppInstallComponent Component =
+        RuntimeBootstrapBackend != ETextGenLlamacppBackend::Vulkan
+        && !Installer->AreCudaDependenciesInstalled(RuntimeBootstrapBackend)
+            ? ETextGenLlamacppInstallComponent::CudaDependencies
+            : ETextGenLlamacppInstallComponent::Runtime;
+    if (Installer->IsInstalling()
+        || !Installer->InstallExact(RuntimeBootstrapTag, RuntimeBootstrapBackend, Component))
+    {
+        FinishRuntimeBootstrap(false,
             LOCTEXT("RuntimeBootstrapStartFailed", "The llama.cpp runtime download could not start."));
     }
 }
@@ -135,7 +178,7 @@ void FTextGenEditorModule::HandleRuntimeInstallProgress(const int64 BytesReceive
             ? FMath::Clamp(static_cast<double>(BytesReceived) / static_cast<double>(TotalBytes), 0.0, 1.0)
             : 0.0;
         Notification->SetText(FText::Format(
-            LOCTEXT("RuntimeBootstrapProgress", "Installing the configured llama.cpp runtime: {0}"),
+            LOCTEXT("RuntimeBootstrapProgress", "Preparing distributable llama.cpp runtimes: {0}"),
             FText::AsPercent(Fraction)));
     }
 }
@@ -145,8 +188,12 @@ void FTextGenEditorModule::HandleRuntimeInstallComplete(const bool bSucceeded, c
 {
     UTextGenRuntimeInstallerSubsystem* Installer = GEngine
         ? GEngine->GetEngineSubsystem<UTextGenRuntimeInstallerSubsystem>() : nullptr;
-    if (bSucceeded && Installer && Component == ETextGenLlamacppInstallComponent::CudaDependencies
-        && !Installer->IsRuntimeInstalled(RuntimeBootstrapTag, RuntimeBootstrapBackend))
+    if (!bSucceeded || !Installer)
+    {
+        FinishRuntimeBootstrap(false, Message);
+        return;
+    }
+    if (Component == ETextGenLlamacppInstallComponent::CudaDependencies)
     {
         if (const TSharedPtr<SNotificationItem> Notification = RuntimeInstallNotification.Pin())
         {
@@ -163,13 +210,18 @@ void FTextGenEditorModule::HandleRuntimeInstallComplete(const bool bSucceeded, c
             LOCTEXT("RuntimeBootstrapCoreFailed", "The llama.cpp runtime download could not start."));
         return;
     }
-    if (GEngine)
+    ++RuntimeBootstrapBackendIndex;
+    ContinueRuntimeBootstrap();
+}
+
+void FTextGenEditorModule::FinishRuntimeBootstrap(const bool bSucceeded, const FText& Message)
+{
+    UTextGenRuntimeInstallerSubsystem* Installer = GEngine
+        ? GEngine->GetEngineSubsystem<UTextGenRuntimeInstallerSubsystem>() : nullptr;
+    if (Installer)
     {
-        if (Installer)
-        {
-            Installer->OnProgressNative().Remove(RuntimeProgressHandle);
-            Installer->OnCompleteNative().Remove(RuntimeCompleteHandle);
-        }
+        Installer->OnProgressNative().Remove(RuntimeProgressHandle);
+        Installer->OnCompleteNative().Remove(RuntimeCompleteHandle);
     }
     RuntimeProgressHandle.Reset();
     RuntimeCompleteHandle.Reset();
@@ -180,7 +232,7 @@ void FTextGenEditorModule::HandleRuntimeInstallComplete(const bool bSucceeded, c
             ? SNotificationItem::CS_Success : SNotificationItem::CS_Fail);
         Notification->ExpireAndFadeout();
     }
-    if (bSucceeded && Component == ETextGenLlamacppInstallComponent::Runtime && GEngine)
+    if (bSucceeded && GEngine)
     {
         const UTextGenProjectSettings* Settings = GetDefault<UTextGenProjectSettings>();
         if (Settings->EditorLifecycle != ETextGenManagedLifecycleMode::Manual

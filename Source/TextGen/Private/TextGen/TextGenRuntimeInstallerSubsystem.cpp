@@ -12,6 +12,7 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "TextGen/TextGenLog.h"
+#include "TextGenLlamacppRuntimePaths.h"
 
 #if PLATFORM_WINDOWS
 #include "Windows/AllowWindowsPlatformTypes.h"
@@ -26,11 +27,6 @@ THIRD_PARTY_INCLUDES_END
 namespace
 {
     const TCHAR* ReleasesAPI = TEXT("https://api.github.com/repos/ggml-org/llama.cpp/releases");
-
-    FString RuntimeRoot()
-    {
-        return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("TextGen/Runtimes/Llamacpp/Win64"));
-    }
 
     bool HashFileSha256(const FString& Path, FString& OutHash)
     {
@@ -95,29 +91,20 @@ namespace
             && !Normalized.Contains(TEXT("/../"));
     }
 
-    FString InstallerBackendDirectoryName(const ETextGenLlamacppBackend Backend)
-    {
-        switch (Backend)
-        {
-        case ETextGenLlamacppBackend::CUDA12: return TEXT("cuda-12.4");
-        case ETextGenLlamacppBackend::Vulkan: return TEXT("vulkan");
-        case ETextGenLlamacppBackend::CUDA13:
-        default: return TEXT("cuda-13.3");
-        }
-    }
-
     FString RuntimeAssetName(const FString& Tag, const ETextGenLlamacppBackend Backend)
     {
         if (Backend == ETextGenLlamacppBackend::Vulkan)
         {
             return FString::Printf(TEXT("llama-%s-bin-win-vulkan-x64.zip"), *Tag);
         }
-        return FString::Printf(TEXT("llama-%s-bin-win-%s-x64.zip"), *Tag, *InstallerBackendDirectoryName(Backend));
+        return FString::Printf(TEXT("llama-%s-bin-win-%s-x64.zip"), *Tag,
+            *TextGenLlamacppRuntimePaths::GetBackendDirectoryName(Backend));
     }
 
     FString CudaDependencyAssetName(const ETextGenLlamacppBackend Backend)
     {
-        return FString::Printf(TEXT("cudart-llama-bin-win-%s-x64.zip"), *InstallerBackendDirectoryName(Backend));
+        return FString::Printf(TEXT("cudart-llama-bin-win-%s-x64.zip"),
+            *TextGenLlamacppRuntimePaths::GetBackendDirectoryName(Backend));
     }
 }
 
@@ -135,21 +122,8 @@ void UTextGenRuntimeInstallerSubsystem::Deinitialize()
 bool UTextGenRuntimeInstallerSubsystem::IsRuntimeInstalled(
     const FString& Tag, const ETextGenLlamacppBackend Backend) const
 {
-    const FString Target = FPaths::Combine(RuntimeRoot(), InstallerBackendDirectoryName(Backend), Tag);
-    if (Tag.IsEmpty() || !FPaths::FileExists(FPaths::Combine(Target, TEXT("llama-server.exe"))))
-    {
-        return false;
-    }
-    if (Backend == ETextGenLlamacppBackend::Vulkan)
-    {
-        return FPaths::FileExists(FPaths::Combine(Target, TEXT("ggml-vulkan.dll")));
-    }
-    TArray<FString> Files;
-    IFileManager::Get().FindFiles(Files, *FPaths::Combine(Target, TEXT("*.dll")), true, false);
-    return Files.ContainsByPredicate([](const FString& Name)
-        { return Name.StartsWith(TEXT("cudart"), ESearchCase::IgnoreCase); })
-        && Files.ContainsByPredicate([](const FString& Name)
-        { return Name.StartsWith(TEXT("cublas"), ESearchCase::IgnoreCase); });
+    FString RuntimeDirectory;
+    return TextGenLlamacppRuntimePaths::ResolveRuntimeDirectory(Tag, Backend, RuntimeDirectory);
 }
 
 bool UTextGenRuntimeInstallerSubsystem::AreCudaDependenciesInstalled(
@@ -160,7 +134,8 @@ bool UTextGenRuntimeInstallerSubsystem::AreCudaDependenciesInstalled(
         return true;
     }
     const FString Cache = FPaths::Combine(
-        RuntimeRoot(), TEXT("_Dependencies"), InstallerBackendDirectoryName(Backend));
+        TextGenLlamacppRuntimePaths::GetWritableRoot(), TEXT("_Dependencies"),
+        TextGenLlamacppRuntimePaths::GetBackendDirectoryName(Backend));
     TArray<FString> Files;
     IFileManager::Get().FindFiles(Files, *FPaths::Combine(Cache, TEXT("*.dll")), true, false);
     return Files.ContainsByPredicate([](const FString& Name)
@@ -338,7 +313,7 @@ bool UTextGenRuntimeInstallerSubsystem::BeginNextDownload()
     ActiveRequest->SetVerb(TEXT("GET"));
     ActiveRequest->SetHeader(TEXT("User-Agent"), TEXT("SoC-TextGen"));
     const FString DownloadDirectory = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("TextGen/RuntimeDownloads"),
-        InstallerBackendDirectoryName(PendingBackend), PendingTag);
+        TextGenLlamacppRuntimePaths::GetBackendDirectoryName(PendingBackend), PendingTag);
     IFileManager::Get().MakeDirectory(*DownloadDirectory, true);
     FPendingAsset& Asset = PendingAssets[ActiveAssetIndex];
     Asset.DownloadPath = FPaths::Combine(DownloadDirectory,
@@ -400,10 +375,11 @@ void UTextGenRuntimeInstallerSubsystem::HandleDownloadResponse(FHttpRequestPtr, 
 
 bool UTextGenRuntimeInstallerSubsystem::ExtractAndPublish(FString& OutError)
 {
-    const FString BackendRoot = FPaths::Combine(RuntimeRoot(), InstallerBackendDirectoryName(PendingBackend));
+    const FString BackendRoot = FPaths::Combine(TextGenLlamacppRuntimePaths::GetWritableRoot(),
+        TextGenLlamacppRuntimePaths::GetBackendDirectoryName(PendingBackend));
     const FString Staging = FPaths::Combine(BackendRoot, TEXT(".staging-")) + FGuid::NewGuid().ToString(EGuidFormats::Digits);
-    const FString DependencyCache = FPaths::Combine(RuntimeRoot(), TEXT("_Dependencies"),
-        InstallerBackendDirectoryName(PendingBackend));
+    const FString DependencyCache = FPaths::Combine(TextGenLlamacppRuntimePaths::GetWritableRoot(),
+        TEXT("_Dependencies"), TextGenLlamacppRuntimePaths::GetBackendDirectoryName(PendingBackend));
     const FString DependencyStaging = DependencyCache + TEXT(".staging-")
         + FGuid::NewGuid().ToString(EGuidFormats::Digits);
     IFileManager::Get().MakeDirectory(*BackendRoot, true);
@@ -532,7 +508,8 @@ bool UTextGenRuntimeInstallerSubsystem::ExtractAndPublish(FString& OutError)
 
     const TSharedRef<FJsonObject> Manifest = MakeShared<FJsonObject>();
     Manifest->SetStringField(TEXT("tag"), PendingTag);
-    Manifest->SetStringField(TEXT("backend"), InstallerBackendDirectoryName(PendingBackend));
+    Manifest->SetStringField(TEXT("backend"),
+        TextGenLlamacppRuntimePaths::GetBackendDirectoryName(PendingBackend));
     Manifest->SetStringField(TEXT("platform"), TEXT("Win64-x64"));
     TArray<TSharedPtr<FJsonValue>> AssetsJson;
     for (const FPendingAsset& Asset : PendingAssets)

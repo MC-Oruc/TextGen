@@ -7,12 +7,16 @@
 #include "Engine/GameInstance.h"
 #include "GameFramework/SaveGame.h"
 #include "Kismet/GameplayStatics.h"
+#include "HAL/FileManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "ProcessRuntimeSubsystem.h"
 #include "ProcessRuntimeTypes.h"
 #include "TextGen/TextGenSubsystem.h"
 #include "TextGen/TextGenConversationCache.h"
 #include "TextGen/TextGenLocalServiceSubsystem.h"
 #include "TextGen/TextGenProjectSettings.h"
+#include "TextGen/TextGenLlamacppRuntimePaths.h"
 #include "TextGen/Providers/OpenAIAPI.h"
 #include "TextGen/Data/TextGenSettingsSave.h"
 #include "UObject/UObjectGlobals.h"
@@ -328,6 +332,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"SoC.Editor.TextGen.Runtime.ConversationCacheRequest",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FSoCTextGenLlamacppRuntimeResolutionTest,
+	"SoC.Editor.TextGen.Runtime.LlamacppRuntimeResolution",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
 #if WITH_EDITOR
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FSoCTextGenDefaultCacheGenerationValidationTest,
@@ -339,6 +348,36 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"SoC.Editor.TextGen.Integration.ManagedLatestConfig",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 #endif
+
+bool FSoCTextGenLlamacppRuntimeResolutionTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const FString Tag = TEXT("automation-") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	const FString RuntimeDirectory = TextGenLlamacppRuntimePaths::GetWritableRuntimeDirectory(
+		Tag, ETextGenLlamacppBackend::CUDA13);
+	IFileManager::Get().MakeDirectory(*RuntimeDirectory, true);
+	FFileHelper::SaveStringToFile(TEXT("test"),
+		*FPaths::Combine(RuntimeDirectory, TEXT("llama-server.exe")));
+	TestFalse(TEXT("Incomplete CUDA runtime is rejected"),
+		TextGenLlamacppRuntimePaths::HasRuntimeInventory(
+			RuntimeDirectory, ETextGenLlamacppBackend::CUDA13));
+
+	FFileHelper::SaveStringToFile(TEXT("test"),
+		*FPaths::Combine(RuntimeDirectory, TEXT("cudart64_13.dll")));
+	FFileHelper::SaveStringToFile(TEXT("test"),
+		*FPaths::Combine(RuntimeDirectory, TEXT("cublas64_13.dll")));
+	TestTrue(TEXT("Complete CUDA runtime is accepted"),
+		TextGenLlamacppRuntimePaths::HasRuntimeInventory(
+			RuntimeDirectory, ETextGenLlamacppBackend::CUDA13));
+
+	FString ResolvedDirectory;
+	TestTrue(TEXT("Writable runtime resolves"),
+		TextGenLlamacppRuntimePaths::ResolveRuntimeDirectory(
+			Tag, ETextGenLlamacppBackend::CUDA13, ResolvedDirectory));
+	TestEqual(TEXT("Writable runtime has priority"), ResolvedDirectory, RuntimeDirectory);
+	IFileManager::Get().DeleteDirectory(*RuntimeDirectory, false, true);
+	return true;
+}
 
 bool FSoCTextGenConversationCacheFilenameTest::RunTest(const FString& Parameters)
 {

@@ -18,6 +18,8 @@ private:
     void HandlePostEngineInit();
     void InitializeContentBrowserIntegration();
     void StartRuntimeBootstrap();
+    void ContinueRuntimeBootstrap();
+    void FinishRuntimeBootstrap(bool bSucceeded, const FText& Message);
     void HandleRuntimeInstallProgress(int64 BytesReceived, int64 TotalBytes);
     void HandleRuntimeInstallComplete(bool bSucceeded, const FString& InstalledTag,
         ETextGenLlamacppBackend Backend, ETextGenLlamacppInstallComponent Component, const FText& Message);
@@ -28,5 +30,7 @@ private:
     FDelegateHandle RuntimeCompleteHandle;
     TWeakPtr<SNotificationItem> RuntimeInstallNotification;
     FString RuntimeBootstrapTag;
+    TArray<ETextGenLlamacppBackend> RuntimeBootstrapBackends;
+    int32 RuntimeBootstrapBackendIndex = 0;
     ETextGenLlamacppBackend RuntimeBootstrapBackend = ETextGenLlamacppBackend::CUDA13;
 };

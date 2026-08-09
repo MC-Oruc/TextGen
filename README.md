@@ -7,7 +7,7 @@ Reusable Unreal Engine text-generation plugin with KoboldCpp, OpenAI, and llama.
 
 Managed llama.cpp support targets Win64 x64 with CUDA 13.3, CUDA 12.4, and Vulkan runtimes. KoboldCpp and OpenAI remain external providers and are never owned or terminated by this plugin.
 
-No llama.cpp executable or accelerator DLL is stored in this repository. After the plugin is enabled and the Editor restarts, TextGen automatically installs the configured official runtime under the project `Saved` directory. Downloads stream directly to disk, require the release SHA-256 digest, reject unsafe archive paths, and publish atomically.
+No llama.cpp executable or accelerator DLL is stored in this repository. After the plugin is enabled and the Editor restarts, TextGen automatically prepares the configured official CUDA 13.3, CUDA 12.4, and Vulkan runtimes under the project `Saved` directory. Downloads stream directly to disk, require the release SHA-256 digest, reject unsafe archive paths, and publish atomically.
 
 The plugin depends on the sibling `ProcessRuntime` plugin for generic owned-process lifecycle management.
 
@@ -63,4 +63,4 @@ pwsh -File ./Scripts/Install-Llamacpp.ps1 -Tag b10333 -Backend CUDA13 -Component
 
 The installer writes to `Saved/TextGen/Runtimes/Llamacpp/Win64/<backend>/<tag>`. It accepts only the selected official accelerator asset, requires GitHub's SHA-256 asset digest, rejects unsafe archive paths, and retains installed tags. CUDA dependencies are cached independently so routine runtime updates do not download them again.
 
-Packaged Win64 builds contain no llama.cpp payload and do not require one during build or cook. Players install the selected runtime through the same Settings UI into their writable `Saved` directory. The runtime remains outside the pak and is available to the managed process immediately after installation.
+Packaged Win64 builds require all three verified runtimes for the configured exact tag and stage them as loose NonUFS files beside the game executable. Players receive a ready-to-run CUDA 13, CUDA 12, and Vulkan distribution without a manual runtime installation. Settings UI updates still publish to the writable `Saved` directory, which takes precedence over the shipped copy without modifying the installed game files.
