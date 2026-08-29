@@ -8,6 +8,7 @@
 #include "Interfaces/IHttpResponse.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeExit.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
@@ -116,7 +117,52 @@ void UTextGenRuntimeInstallerSubsystem::Deinitialize()
     }
     ActiveRequest.Reset();
     ActiveDownloadStream.Reset();
+    CleanupPendingDownloads();
     Super::Deinitialize();
+}
+
+void UTextGenRuntimeInstallerSubsystem::ReconcileInstallerArtifacts(const ETextGenLlamacppBackend Backend)
+{
+    const FString WritableRoot = TextGenLlamacppRuntimePaths::GetWritableRoot();
+    const FString BackendRoot = FPaths::Combine(WritableRoot,
+        TextGenLlamacppRuntimePaths::GetBackendDirectoryName(Backend));
+    const FString DependencyRoot = FPaths::Combine(WritableRoot, TEXT("_Dependencies"));
+    for (const FString& Root : {BackendRoot, DependencyRoot})
+    {
+        TArray<FString> Directories;
+        IFileManager::Get().FindFiles(Directories, *FPaths::Combine(Root, TEXT("*")), false, true);
+        for (const FString& Directory : Directories)
+        {
+            const FString Path = FPaths::Combine(Root, Directory);
+            if (Directory.Contains(TEXT(".staging-")))
+            {
+                IFileManager::Get().DeleteDirectory(*Path, false, true);
+                continue;
+            }
+            if (!Directory.EndsWith(TEXT(".rollback")))
+            {
+                continue;
+            }
+            const FString Target = Path.LeftChop(9);
+            if (IFileManager::Get().DirectoryExists(*Target))
+            {
+                IFileManager::Get().DeleteDirectory(*Path, false, true);
+            }
+            else
+            {
+                IFileManager::Get().Move(*Target, *Path, true, false, false, true);
+            }
+        }
+    }
+}
+
+void UTextGenRuntimeInstallerSubsystem::CleanupPendingDownloads()
+{
+    if (!PendingDownloadDirectory.IsEmpty())
+    {
+        IFileManager::Get().DeleteDirectory(*PendingDownloadDirectory, false, true);
+        PendingDownloadDirectory.Reset();
+    }
 }
 
 bool UTextGenRuntimeInstallerSubsystem::IsRuntimeInstalled(
@@ -185,6 +231,7 @@ bool UTextGenRuntimeInstallerSubsystem::BeginReleaseRequest(const FString& Endpo
     {
         return false;
     }
+    ReconcileInstallerArtifacts(PendingBackend);
     bInstalling = true;
     PendingTag.Reset();
     PendingAssets.Reset();
@@ -312,11 +359,11 @@ bool UTextGenRuntimeInstallerSubsystem::BeginNextDownload()
     ActiveRequest->SetURL(PendingAssets[ActiveAssetIndex].URL);
     ActiveRequest->SetVerb(TEXT("GET"));
     ActiveRequest->SetHeader(TEXT("User-Agent"), TEXT("SoC-TextGen"));
-    const FString DownloadDirectory = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("TextGen/RuntimeDownloads"),
+    PendingDownloadDirectory = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("TextGen/RuntimeDownloads"),
         TextGenLlamacppRuntimePaths::GetBackendDirectoryName(PendingBackend), PendingTag);
-    IFileManager::Get().MakeDirectory(*DownloadDirectory, true);
+    IFileManager::Get().MakeDirectory(*PendingDownloadDirectory, true);
     FPendingAsset& Asset = PendingAssets[ActiveAssetIndex];
-    Asset.DownloadPath = FPaths::Combine(DownloadDirectory,
+    Asset.DownloadPath = FPaths::Combine(PendingDownloadDirectory,
         FGuid::NewGuid().ToString(EGuidFormats::Digits) + TEXT("-") + Asset.Name + TEXT(".partial"));
     ActiveDownloadStream = MakeShareable(IFileManager::Get().CreateFileWriter(*Asset.DownloadPath));
     if (!ActiveDownloadStream.IsValid()
@@ -382,6 +429,11 @@ bool UTextGenRuntimeInstallerSubsystem::ExtractAndPublish(FString& OutError)
         TEXT("_Dependencies"), TextGenLlamacppRuntimePaths::GetBackendDirectoryName(PendingBackend));
     const FString DependencyStaging = DependencyCache + TEXT(".staging-")
         + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+    ON_SCOPE_EXIT
+    {
+        IFileManager::Get().DeleteDirectory(*Staging, false, true);
+        IFileManager::Get().DeleteDirectory(*DependencyStaging, false, true);
+    };
     IFileManager::Get().MakeDirectory(*BackendRoot, true);
     if (PendingComponent == ETextGenLlamacppInstallComponent::Runtime)
     {
@@ -543,15 +595,22 @@ bool UTextGenRuntimeInstallerSubsystem::ExtractAndPublish(FString& OutError)
         IFileManager::Get().MakeDirectory(*FPaths::GetPath(DependencyCache), true);
         if (IFileManager::Get().DirectoryExists(*DependencyCache))
         {
-            const FString DependencyBackup = DependencyCache + TEXT(".bak-")
-                + FDateTime::UtcNow().ToString(TEXT("%Y%m%d%H%M%S"));
-            if (!IFileManager::Get().Move(*DependencyBackup, *DependencyCache, true, false, false, true))
+            const FString DependencyRollback = DependencyCache + TEXT(".rollback");
+            IFileManager::Get().DeleteDirectory(*DependencyRollback, false, true);
+            if (!IFileManager::Get().Move(*DependencyRollback, *DependencyCache, true, false, false, true))
             {
                 OutError = TEXT("Existing CUDA dependency cache could not be archived.");
                 return false;
             }
+            if (!IFileManager::Get().Move(*DependencyCache, *DependencyStaging, true, false, false, true))
+            {
+                IFileManager::Get().Move(*DependencyCache, *DependencyRollback, true, false, false, true);
+                OutError = TEXT("Verified CUDA dependencies could not be published atomically.");
+                return false;
+            }
+            IFileManager::Get().DeleteDirectory(*DependencyRollback, false, true);
         }
-        if (!IFileManager::Get().Move(*DependencyCache, *DependencyStaging, true, false, false, true))
+        else if (!IFileManager::Get().Move(*DependencyCache, *DependencyStaging, true, false, false, true))
         {
             OutError = TEXT("Verified CUDA dependencies could not be published atomically.");
             return false;
@@ -566,7 +625,7 @@ bool UTextGenRuntimeInstallerSubsystem::ExtractAndPublish(FString& OutError)
                 *FPaths::Combine(DependencyCache, TEXT("*.dll")), true, false);
             for (const FString& RuntimeDirectory : InstalledRuntimeDirectories)
             {
-                if (RuntimeDirectory.StartsWith(TEXT(".")) || RuntimeDirectory.Contains(TEXT(".bak-")))
+                if (RuntimeDirectory.StartsWith(TEXT(".")) || RuntimeDirectory.EndsWith(TEXT(".rollback")))
                 {
                     continue;
                 }
@@ -586,10 +645,11 @@ bool UTextGenRuntimeInstallerSubsystem::ExtractAndPublish(FString& OutError)
     }
 
     const FString Target = FPaths::Combine(BackendRoot, PendingTag);
+    const FString TargetRollback = Target + TEXT(".rollback");
+    IFileManager::Get().DeleteDirectory(*TargetRollback, false, true);
     if (IFileManager::Get().DirectoryExists(*Target))
     {
-        const FString TargetBackup = Target + TEXT(".bak-") + FDateTime::UtcNow().ToString(TEXT("%Y%m%d%H%M%S"));
-        if (!IFileManager::Get().Move(*TargetBackup, *Target, true, false, false, true))
+        if (!IFileManager::Get().Move(*TargetRollback, *Target, true, false, false, true))
         {
             OutError = TEXT("Existing llama.cpp runtime could not be archived.");
             return false;
@@ -597,9 +657,14 @@ bool UTextGenRuntimeInstallerSubsystem::ExtractAndPublish(FString& OutError)
     }
     if (!IFileManager::Get().Move(*Target, *Staging, true, false, false, true))
     {
+        if (IFileManager::Get().DirectoryExists(*TargetRollback))
+        {
+            IFileManager::Get().Move(*Target, *TargetRollback, true, false, false, true);
+        }
         OutError = TEXT("The verified llama.cpp runtime could not be published atomically.");
         return false;
     }
+    IFileManager::Get().DeleteDirectory(*TargetRollback, false, true);
     return true;
 }
 
@@ -607,6 +672,7 @@ void UTextGenRuntimeInstallerSubsystem::Finish(const bool bSucceeded, const FStr
 {
     ActiveRequest.Reset();
     ActiveDownloadStream.Reset();
+    CleanupPendingDownloads();
     bInstalling = false;
     const FText Message = bSucceeded
         ? NSLOCTEXT("TextGen", "RuntimeInstallSucceeded", "llama.cpp component installed successfully.")

@@ -64,6 +64,8 @@ private:
     };
 
     bool BeginReleaseRequest(const FString& Endpoint);
+    void ReconcileInstallerArtifacts(ETextGenLlamacppBackend Backend);
+    void CleanupPendingDownloads();
     void HandleReleaseResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded);
     bool BeginNextDownload();
     void HandleDownloadProgress(FHttpRequestPtr Request, uint64 BytesSent, uint64 BytesReceived);
@@ -77,6 +79,7 @@ private:
     ETextGenLlamacppBackend PendingBackend = ETextGenLlamacppBackend::CUDA13;
     ETextGenLlamacppInstallComponent PendingComponent = ETextGenLlamacppInstallComponent::Runtime;
     TArray<FPendingAsset> PendingAssets;
+    FString PendingDownloadDirectory;
     int32 ActiveAssetIndex = INDEX_NONE;
     FHttpRequestPtr ActiveRequest;
     TSharedPtr<FArchive> ActiveDownloadStream;
