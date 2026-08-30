@@ -19,7 +19,7 @@ namespace
 
 void FTextGenModule::StartupModule()
 {
-    PostEngineInitHandle = FCoreDelegates::OnPostEngineInit.AddRaw(this, &FTextGenModule::HandlePostEngineInit);
+    PostEngineInitHandle = FCoreDelegates::GetOnPostEngineInit().AddRaw(this, &FTextGenModule::HandlePostEngineInit);
     WorldInitializedHandle = FWorldDelegates::OnPostWorldInitialization.AddRaw(
         this, &FTextGenModule::HandleWorldInitialized);
     WorldCleanupHandle = FWorldDelegates::OnWorldCleanup.AddRaw(this, &FTextGenModule::HandleWorldCleanup);
@@ -43,7 +43,7 @@ void FTextGenModule::StartupModule()
 void FTextGenModule::ShutdownModule()
 {
     StopManaged();
-    FCoreDelegates::OnPostEngineInit.Remove(PostEngineInitHandle);
+    FCoreDelegates::GetOnPostEngineInit().Remove(PostEngineInitHandle);
     FWorldDelegates::OnPostWorldInitialization.Remove(WorldInitializedHandle);
     FWorldDelegates::OnWorldCleanup.Remove(WorldCleanupHandle);
 #if WITH_EDITOR

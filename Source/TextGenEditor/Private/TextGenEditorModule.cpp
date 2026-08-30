@@ -56,14 +56,14 @@ void FTextGenEditorModule::StartupModule()
     }
     else
     {
-        PostEngineInitHandle = FCoreDelegates::OnPostEngineInit.AddRaw(
+        PostEngineInitHandle = FCoreDelegates::GetOnPostEngineInit().AddRaw(
             this, &FTextGenEditorModule::HandlePostEngineInit);
     }
 }
 
 void FTextGenEditorModule::ShutdownModule()
 {
-    FCoreDelegates::OnPostEngineInit.Remove(PostEngineInitHandle);
+    FCoreDelegates::GetOnPostEngineInit().Remove(PostEngineInitHandle);
     if (GEngine)
     {
         if (UTextGenRuntimeInstallerSubsystem* Installer =
@@ -84,7 +84,7 @@ void FTextGenEditorModule::ShutdownModule()
 
 void FTextGenEditorModule::HandlePostEngineInit()
 {
-    FCoreDelegates::OnPostEngineInit.Remove(PostEngineInitHandle);
+    FCoreDelegates::GetOnPostEngineInit().Remove(PostEngineInitHandle);
     PostEngineInitHandle.Reset();
     StartRuntimeBootstrap();
 }

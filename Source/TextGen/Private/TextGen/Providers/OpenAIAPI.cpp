@@ -243,10 +243,10 @@ bool FOpenAIProvider::ParseModelsResponse(const FString& ResponseString, TArray<
     auto TryGetJsonIntSafely = [](const TSharedPtr<FJsonObject>& JsonObj, const FString& FieldName, int32& OutValue) -> bool
     {
         if (!JsonObj.IsValid()) return false;
-        const TSharedPtr<FJsonValue>* FieldVal = JsonObj->Values.Find(FieldName);
-        if (FieldVal && FieldVal->IsValid() && (*FieldVal)->Type == EJson::Number)
+        const TSharedPtr<FJsonValue> FieldVal = JsonObj->TryGetField(FieldName);
+        if (FieldVal.IsValid() && FieldVal->Type == EJson::Number)
         {
-            OutValue = static_cast<int32>((*FieldVal)->AsNumber());
+            OutValue = static_cast<int32>(FieldVal->AsNumber());
             return true;
         }
         return false;
@@ -318,7 +318,7 @@ bool FOpenAIProvider::ParseModelsResponse(const FString& ResponseString, TArray<
             {
                 for (const auto& Pair : PricingObj->Values)
                 {
-                    const FString& Key = Pair.Key;
+                    const FString Key(Pair.Key.ToView());
                     FString ValStr;
 
                     if (Pair.Value->TryGetString(ValStr))
