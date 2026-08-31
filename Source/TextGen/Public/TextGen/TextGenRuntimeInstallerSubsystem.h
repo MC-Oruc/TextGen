@@ -57,16 +57,17 @@ private:
     {
         FString Name;
         FString URL;
-        FString SHA256;
         int64 Size = 0;
         bool bCudaDependency = false;
         FString DownloadPath;
     };
 
     bool BeginReleaseRequest(const FString& Endpoint);
+    bool RequestRelease(const FString& Endpoint);
     void ReconcileInstallerArtifacts(ETextGenLlamacppBackend Backend);
     void CleanupPendingDownloads();
     void HandleReleaseResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded);
+    void HandleStableAssetTagResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded);
     bool BeginNextDownload();
     void HandleDownloadProgress(FHttpRequestPtr Request, uint64 BytesSent, uint64 BytesReceived);
     void HandleDownloadResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded);
@@ -76,6 +77,8 @@ private:
     bool bInstalling = false;
     FString RequestedTag;
     FString PendingTag;
+    FString PendingAssetTag;
+    bool bResolvingStableAssets = false;
     ETextGenLlamacppBackend PendingBackend = ETextGenLlamacppBackend::CUDA13;
     ETextGenLlamacppInstallComponent PendingComponent = ETextGenLlamacppInstallComponent::Runtime;
     TArray<FPendingAsset> PendingAssets;

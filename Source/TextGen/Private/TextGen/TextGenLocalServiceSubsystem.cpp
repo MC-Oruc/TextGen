@@ -811,7 +811,7 @@ bool UTextGenLocalServiceSubsystem::PublishModelPreset(const FTextGenLlamacppCon
         Lines.Add(TEXT("no-kv-offload = true"));
         break;
     }
-    Lines.Add(Config.bMMap ? TEXT("mmap = true") : TEXT("no-mmap = true"));
+    Lines.Add(Config.bMMap ? TEXT("load-mode = mmap") : TEXT("load-mode = none"));
     Lines.Add(Config.bFlashAttention ? TEXT("flash-attn = on") : TEXT("flash-attn = off"));
     Lines.Add(FString::Printf(TEXT("cache-type-k = %s"), *CacheTypeToPresetValue(Config.CacheTypeK)));
     Lines.Add(FString::Printf(TEXT("cache-type-v = %s"), *CacheTypeToPresetValue(Config.CacheTypeV)));

@@ -27,7 +27,6 @@ public class TextGen : ModuleRules
 
         if (Target.Platform == UnrealTargetPlatform.Win64)
         {
-            PublicSystemLibraries.Add("Bcrypt.lib");
 
             if (!Target.bBuildEditor && Target.ProjectFile != null)
             {

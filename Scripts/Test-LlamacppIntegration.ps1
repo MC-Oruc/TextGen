@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ModelPath,
-    [string]$Tag = "b10333",
+    [string]$Tag = "v0.3.0",
     [ValidateSet("CUDA13", "CUDA12", "Vulkan")]
     [string]$Backend = "CUDA13",
     [int]$StartupTimeoutSeconds = 300
@@ -50,7 +50,7 @@ $preset = @(
     "device = $deviceName"
     "n-gpu-layers = all"
     "override-tensor = .*exps.*=CPU"
-    "mmap = true"
+    "load-mode = mmap"
     "flash-attn = on"
     "cache-type-k = f16"
     "cache-type-v = f16"

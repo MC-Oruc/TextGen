@@ -48,7 +48,7 @@ $ModelPath = [System.IO.Path]::GetFullPath($ModelPath)
 if (-not (Test-Path -LiteralPath $ModelPath -PathType Leaf)) { throw "GGUF model not found: $ModelPath" }
 
 $runtimeRoot = Join-Path $PSScriptRoot "..\..\..\Saved\TextGen\Runtimes\Llamacpp\Win64"
-if ([string]::IsNullOrWhiteSpace($Tag)) { $Tag = "b10333" }
+if ([string]::IsNullOrWhiteSpace($Tag)) { $Tag = "v0.3.0" }
 $backendDirectory = switch ($Backend) {
     "CUDA13" { "cuda-13.3" }
     "CUDA12" { "cuda-12.4" }
@@ -82,7 +82,7 @@ $preset = @(
     "threads = $Threads"
     "batch-size = $BatchSize"
     "ubatch-size = $UBatchSize"
-    "mmap = true"
+    "load-mode = mmap"
     "flash-attn = $FlashAttention"
     "cache-type-k = f16"
     "cache-type-v = f16"

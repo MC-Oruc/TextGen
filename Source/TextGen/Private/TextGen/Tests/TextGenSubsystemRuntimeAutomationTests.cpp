@@ -382,17 +382,17 @@ bool FSoCTextGenLlamacppRuntimeResolutionTest::RunTest(const FString& Parameters
 bool FSoCTextGenConversationCacheFilenameTest::RunTest(const FString& Parameters)
 {
 	const FString Default = FTextGenConversationCachePaths::BuildDefaultFilename(
-		TEXT("NPC:Mayor__Day/03"), TEXT("b10333"), TEXT("gemma model"), 12288,
+		TEXT("NPC:Mayor__Day/03"), TEXT("v0.3.0"), TEXT("gemma model"), 12288,
 		ETextGenLlamacppKVCacheType::Q8_0, ETextGenLlamacppKVCacheType::Q4_0);
 	const FString Progress = FTextGenConversationCachePaths::BuildProgressFilename(
-		TEXT("NPC:Mayor__Day/03"), TEXT("b10333"), TEXT("gemma model"), 12288,
+		TEXT("NPC:Mayor__Day/03"), TEXT("v0.3.0"), TEXT("gemma model"), 12288,
 		ETextGenLlamacppKVCacheType::Q8_0, ETextGenLlamacppKVCacheType::Q4_0);
 	TestEqual(TEXT("Default cache filename is readable and deterministic"), Default,
-		TEXT("NPC-Mayor-Day-03_b10333_gemma-model_Ctx12288_KQ8-0_VQ4-0_Default.bin"));
+		TEXT("NPC-Mayor-Day-03_v0.3.0_gemma-model_Ctx12288_KQ8-0_VQ4-0_Default.bin"));
 	TestEqual(TEXT("Progress cache filename uses the same key"), Progress,
-		TEXT("NPC-Mayor-Day-03_b10333_gemma-model_Ctx12288_KQ8-0_VQ4-0_Progress.bin"));
+		TEXT("NPC-Mayor-Day-03_v0.3.0_gemma-model_Ctx12288_KQ8-0_VQ4-0_Progress.bin"));
 	const FString AlternateKV = FTextGenConversationCachePaths::BuildDefaultFilename(
-		TEXT("NPC:Mayor__Day/03"), TEXT("b10333"), TEXT("gemma model"), 12288,
+		TEXT("NPC:Mayor__Day/03"), TEXT("v0.3.0"), TEXT("gemma model"), 12288,
 		ETextGenLlamacppKVCacheType::Q4_0, ETextGenLlamacppKVCacheType::Q4_0);
 	TestNotEqual(TEXT("Different KV cache types use different files"), AlternateKV, Default);
 	return true;

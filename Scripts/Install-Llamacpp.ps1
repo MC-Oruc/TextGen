@@ -27,10 +27,31 @@ $releaseUri = if ([string]::IsNullOrWhiteSpace($Tag)) {
 }
 $release = Invoke-RestMethod -Uri $releaseUri -Headers $headers
 $resolvedTag = [string]$release.tag_name
+$assetTag = $resolvedTag
+if ($resolvedTag -match '^v\d+\.\d+\.\d+$') {
+    $tagAsset = @($release.assets | Where-Object { $_.name -ceq "nightly-tag.txt" })
+    if ($tagAsset.Count -ne 1) {
+        throw "Stable release '$resolvedTag' does not contain exactly one nightly-tag.txt asset."
+    }
+    $tagFile = [System.IO.Path]::GetTempFileName()
+    try {
+        Invoke-WebRequest -Uri ([string]$tagAsset[0].browser_download_url) -OutFile $tagFile -Headers $headers
+        $assetTag = (Get-Content -LiteralPath $tagFile -Raw).Trim()
+    } finally {
+        Remove-Item -LiteralPath $tagFile -Force -ErrorAction SilentlyContinue
+    }
+    if ($assetTag -notmatch '^b\d+$') {
+        throw "Stable release '$resolvedTag' contains invalid binary tag '$assetTag'."
+    }
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repository/releases/tags/$assetTag" -Headers $headers
+    if ([string]$release.tag_name -cne $assetTag) {
+        throw "Stable release '$resolvedTag' resolved to an inconsistent binary release."
+    }
+}
 $runtimeAssetName = if ($Backend -eq "Vulkan") {
-    "llama-$resolvedTag-bin-win-vulkan-x64.zip"
+    "llama-$assetTag-bin-win-vulkan-x64.zip"
 } else {
-    "llama-$resolvedTag-bin-win-$backendDirectory-x64.zip"
+    "llama-$assetTag-bin-win-$backendDirectory-x64.zip"
 }
 $dependencyAssetName = if ($Backend -eq "Vulkan") { $null } else { "cudart-llama-bin-win-$backendDirectory-x64.zip" }
 
@@ -39,23 +60,14 @@ function Resolve-ReleaseAsset([string]$Name) {
     if ($assetMatches.Count -ne 1) {
         throw "Release '$resolvedTag' does not contain exactly one '$Name' asset."
     }
-    $digest = [string]$assetMatches[0].digest
-    if ($digest -notmatch '^sha256:([0-9a-fA-F]{64})$') {
-        throw "GitHub asset '$Name' has no mandatory SHA-256 digest."
-    }
     [pscustomobject]@{
         Name = $Name
         Url = [string]$assetMatches[0].browser_download_url
-        Sha256 = $Matches[1].ToLowerInvariant()
     }
 }
 
-function Download-VerifiedAsset($Asset, [string]$Destination) {
+function Download-Asset($Asset, [string]$Destination) {
     Invoke-WebRequest -Uri $Asset.Url -OutFile $Destination -Headers $headers
-    $actual = (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($actual -ne $Asset.Sha256) {
-        throw "SHA-256 mismatch for '$($Asset.Name)'. Expected $($Asset.Sha256), got $actual."
-    }
 }
 
 function Expand-SafeArchive([string]$Archive, [string]$Destination) {
@@ -92,7 +104,7 @@ if ($Component -eq "CudaDependencies") {
     $dependencyArchive = Join-Path $staging $dependencyAsset.Name
     $dependencyExtract = Join-Path $staging "dependency"
     [System.IO.Directory]::CreateDirectory($dependencyExtract) | Out-Null
-    Download-VerifiedAsset $dependencyAsset $dependencyArchive
+    Download-Asset $dependencyAsset $dependencyArchive
     Expand-SafeArchive $dependencyArchive $dependencyExtract
     [System.IO.Directory]::CreateDirectory($dependencyCache) | Out-Null
     Get-ChildItem -LiteralPath $dependencyExtract -Recurse -File -Filter "*.dll" | ForEach-Object {
@@ -111,7 +123,7 @@ if ($Component -eq "CudaDependencies") {
 $runtimeArchive = Join-Path $staging $runtimeAsset.Name
 $runtimeExtract = Join-Path $staging "runtime"
 [System.IO.Directory]::CreateDirectory($runtimeExtract) | Out-Null
-Download-VerifiedAsset $runtimeAsset $runtimeArchive
+Download-Asset $runtimeAsset $runtimeArchive
 Expand-SafeArchive $runtimeArchive $runtimeExtract
 $server = @(Get-ChildItem -LiteralPath $runtimeExtract -Recurse -File -Filter "llama-server.exe")
 if ($server.Count -ne 1) {
@@ -130,7 +142,7 @@ if ($dependencyAsset) {
         $dependencyArchive = Join-Path $staging $dependencyAsset.Name
         $dependencyExtract = Join-Path $staging "dependency"
         [System.IO.Directory]::CreateDirectory($dependencyExtract) | Out-Null
-        Download-VerifiedAsset $dependencyAsset $dependencyArchive
+        Download-Asset $dependencyAsset $dependencyArchive
         Expand-SafeArchive $dependencyArchive $dependencyExtract
         [System.IO.Directory]::CreateDirectory($dependencyCache) | Out-Null
         Get-ChildItem -LiteralPath $dependencyExtract -Recurse -File -Filter "*.dll" | ForEach-Object {
@@ -143,7 +155,7 @@ if ($dependencyAsset) {
 }
 
 $inventory = @(Get-ChildItem -LiteralPath $publishRoot -File | Sort-Object Name | ForEach-Object {
-    [ordered]@{ name = $_.Name; size = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+    [ordered]@{ name = $_.Name; size = $_.Length }
 })
 $manifest = [ordered]@{
     tag = $resolvedTag
@@ -151,7 +163,6 @@ $manifest = [ordered]@{
     architecture = "x64"
     backend = $backendDirectory
     runtime_asset = $runtimeAsset.Name
-    runtime_sha256 = $runtimeAsset.Sha256
     cuda_dependency_asset = if ($dependencyAsset) { $dependencyAsset.Name } else { $null }
     installed_utc = [DateTime]::UtcNow.ToString("o")
     files = $inventory

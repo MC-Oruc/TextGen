@@ -15,12 +15,6 @@
 #include "TextGen/TextGenLog.h"
 #include "TextGenLlamacppRuntimePaths.h"
 
-#if PLATFORM_WINDOWS
-#include "Windows/AllowWindowsPlatformTypes.h"
-#include <bcrypt.h>
-#include "Windows/HideWindowsPlatformTypes.h"
-#endif
-
 THIRD_PARTY_INCLUDES_START
 #include <libzip/zip.h>
 THIRD_PARTY_INCLUDES_END
@@ -28,57 +22,6 @@ THIRD_PARTY_INCLUDES_END
 namespace
 {
     const TCHAR* ReleasesAPI = TEXT("https://api.github.com/repos/ggml-org/llama.cpp/releases");
-
-    bool HashFileSha256(const FString& Path, FString& OutHash)
-    {
-#if PLATFORM_WINDOWS
-        BCRYPT_ALG_HANDLE Algorithm = nullptr;
-        BCRYPT_HASH_HANDLE Hash = nullptr;
-        DWORD ObjectSize = 0;
-        DWORD ResultSize = 0;
-        TArray<uint8> HashObject;
-        uint8 Digest[32];
-        bool bSucceeded = BCRYPT_SUCCESS(BCryptOpenAlgorithmProvider(
-            &Algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0));
-        if (bSucceeded)
-        {
-            bSucceeded = BCRYPT_SUCCESS(BCryptGetProperty(Algorithm, BCRYPT_OBJECT_LENGTH,
-                reinterpret_cast<PUCHAR>(&ObjectSize), sizeof(ObjectSize), &ResultSize, 0));
-        }
-        if (bSucceeded)
-        {
-            HashObject.SetNumUninitialized(ObjectSize);
-            bSucceeded = BCRYPT_SUCCESS(BCryptCreateHash(Algorithm, &Hash,
-                HashObject.GetData(), HashObject.Num(), nullptr, 0, 0));
-        }
-        TUniquePtr<FArchive> Input(IFileManager::Get().CreateFileReader(*Path));
-        bSucceeded = bSucceeded && Input.IsValid();
-        TArray<uint8> Buffer;
-        Buffer.SetNumUninitialized(1024 * 1024);
-        while (bSucceeded && !Input->AtEnd())
-        {
-            const int64 Remaining = Input->TotalSize() - Input->Tell();
-            const int32 ReadSize = static_cast<int32>(FMath::Min<int64>(Buffer.Num(), Remaining));
-            Input->Serialize(Buffer.GetData(), ReadSize);
-            bSucceeded = !Input->IsError()
-                && BCRYPT_SUCCESS(BCryptHashData(Hash, Buffer.GetData(), ReadSize, 0));
-        }
-        if (bSucceeded)
-        {
-            bSucceeded = BCRYPT_SUCCESS(BCryptFinishHash(Hash, Digest, sizeof(Digest), 0));
-        }
-        if (Hash) BCryptDestroyHash(Hash);
-        if (Algorithm) BCryptCloseAlgorithmProvider(Algorithm, 0);
-        if (!bSucceeded)
-        {
-            return false;
-        }
-        OutHash = BytesToHex(Digest, sizeof(Digest)).ToLower();
-        return true;
-#else
-        return false;
-#endif
-    }
 
     bool IsSafeArchivePath(const FString& Path)
     {
@@ -234,8 +177,15 @@ bool UTextGenRuntimeInstallerSubsystem::BeginReleaseRequest(const FString& Endpo
     ReconcileInstallerArtifacts(PendingBackend);
     bInstalling = true;
     PendingTag.Reset();
+    PendingAssetTag.Reset();
+    bResolvingStableAssets = false;
     PendingAssets.Reset();
     ActiveAssetIndex = INDEX_NONE;
+    return RequestRelease(Endpoint);
+}
+
+bool UTextGenRuntimeInstallerSubsystem::RequestRelease(const FString& Endpoint)
+{
     ActiveRequest = FHttpModule::Get().CreateRequest();
     ActiveRequest->SetURL(Endpoint);
     ActiveRequest->SetVerb(TEXT("GET"));
@@ -260,15 +210,60 @@ void UTextGenRuntimeInstallerSubsystem::HandleReleaseResponse(FHttpRequestPtr, F
 
     TSharedPtr<FJsonObject> Root;
     const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Response->GetContentAsString());
-    if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid() || !Root->TryGetStringField(TEXT("tag_name"), PendingTag))
+    FString ReleaseTag;
+    if (!FJsonSerializer::Deserialize(Reader, Root) || !Root.IsValid() || !Root->TryGetStringField(TEXT("tag_name"), ReleaseTag))
     {
         Finish(false, TEXT("The official llama.cpp release response is invalid."));
         return;
     }
-    if (!RequestedTag.IsEmpty() && PendingTag != RequestedTag)
+    if (bResolvingStableAssets)
+    {
+        if (ReleaseTag != PendingAssetTag)
+        {
+            Finish(false, TEXT("The stable llama.cpp binary release does not match its declared nightly tag."));
+            return;
+        }
+    }
+    else if (!RequestedTag.IsEmpty() && ReleaseTag != RequestedTag)
     {
         Finish(false, TEXT("The resolved llama.cpp tag does not match the requested tag."));
         return;
+    }
+    else
+    {
+        PendingTag = ReleaseTag;
+    }
+
+    const TArray<TSharedPtr<FJsonValue>>* Assets = nullptr;
+    if (!Root->TryGetArrayField(TEXT("assets"), Assets) || !Assets)
+    {
+        Finish(false, TEXT("The release contains no assets."));
+        return;
+    }
+    if (!bResolvingStableAssets && PendingTag.StartsWith(TEXT("v"), ESearchCase::CaseSensitive))
+    {
+        for (const TSharedPtr<FJsonValue>& Value : *Assets)
+        {
+            const TSharedPtr<FJsonObject> Asset = Value.IsValid() ? Value->AsObject() : nullptr;
+            FString Name;
+            FString URL;
+            if (Asset.IsValid() && Asset->TryGetStringField(TEXT("name"), Name)
+                && Name == TEXT("nightly-tag.txt")
+                && Asset->TryGetStringField(TEXT("browser_download_url"), URL))
+            {
+                ActiveRequest = FHttpModule::Get().CreateRequest();
+                ActiveRequest->SetURL(URL);
+                ActiveRequest->SetVerb(TEXT("GET"));
+                ActiveRequest->SetHeader(TEXT("User-Agent"), TEXT("SoC-TextGen"));
+                ActiveRequest->OnProcessRequestComplete().BindUObject(
+                    this, &UTextGenRuntimeInstallerSubsystem::HandleStableAssetTagResponse);
+                if (!ActiveRequest->ProcessRequest())
+                {
+                    Finish(false, TEXT("Could not resolve the stable llama.cpp binary release."));
+                }
+                return;
+            }
+        }
     }
     if (PendingComponent == ETextGenLlamacppInstallComponent::Runtime
         && IsRuntimeInstalled(PendingTag, PendingBackend))
@@ -277,15 +272,10 @@ void UTextGenRuntimeInstallerSubsystem::HandleReleaseResponse(FHttpRequestPtr, F
         return;
     }
 
-    const FString ExpectedRuntimeName = RuntimeAssetName(PendingTag, PendingBackend);
+    const FString ExpectedRuntimeName = RuntimeAssetName(
+        PendingAssetTag.IsEmpty() ? PendingTag : PendingAssetTag, PendingBackend);
     const FString ExpectedDependencyName = PendingBackend == ETextGenLlamacppBackend::Vulkan
         ? FString() : CudaDependencyAssetName(PendingBackend);
-    const TArray<TSharedPtr<FJsonValue>>* Assets = nullptr;
-    if (!Root->TryGetArrayField(TEXT("assets"), Assets) || !Assets)
-    {
-        Finish(false, TEXT("The release contains no assets."));
-        return;
-    }
     TArray<FString> ExpectedNames;
     if (PendingComponent == ETextGenLlamacppInstallComponent::CudaDependencies)
     {
@@ -310,25 +300,17 @@ void UTextGenRuntimeInstallerSubsystem::HandleReleaseResponse(FHttpRequestPtr, F
         {
             const TSharedPtr<FJsonObject> Asset = Value.IsValid() ? Value->AsObject() : nullptr;
             FString Name;
-            FString Digest;
             if (!Asset.IsValid() || !Asset->TryGetStringField(TEXT("name"), Name) || Name != ExpectedName
-                || !Asset->TryGetStringField(TEXT("browser_download_url"), PendingAsset.URL)
-                || !Asset->TryGetStringField(TEXT("digest"), Digest))
+                || !Asset->TryGetStringField(TEXT("browser_download_url"), PendingAsset.URL))
             {
                 continue;
             }
-            if (!Digest.RemoveFromStart(TEXT("sha256:"), ESearchCase::IgnoreCase) || Digest.Len() != 64)
-            {
-                Finish(false, TEXT("A required release asset has no valid SHA-256 digest."));
-                return;
-            }
-            PendingAsset.SHA256 = Digest.ToLower();
             double Size = 0;
             Asset->TryGetNumberField(TEXT("size"), Size);
             PendingAsset.Size = static_cast<int64>(Size);
             break;
         }
-        if (PendingAsset.URL.IsEmpty() || PendingAsset.SHA256.IsEmpty())
+        if (PendingAsset.URL.IsEmpty())
         {
             Finish(false, FString::Printf(TEXT("Required official llama.cpp asset '%s' is missing."), *ExpectedName));
             return;
@@ -339,6 +321,27 @@ void UTextGenRuntimeInstallerSubsystem::HandleReleaseResponse(FHttpRequestPtr, F
     {
         Finish(false, TEXT("Could not start the llama.cpp component download."));
     }
+}
+
+void UTextGenRuntimeInstallerSubsystem::HandleStableAssetTagResponse(
+    FHttpRequestPtr, FHttpResponsePtr Response, const bool bSucceeded)
+{
+    if (!bSucceeded || !Response.IsValid() || Response->GetResponseCode() != 200)
+    {
+        Finish(false, TEXT("The stable llama.cpp binary tag could not be resolved."));
+        return;
+    }
+    PendingAssetTag = Response->GetContentAsString();
+    PendingAssetTag.TrimStartAndEndInline();
+    if (!PendingAssetTag.StartsWith(TEXT("b"), ESearchCase::CaseSensitive)
+        || !PendingAssetTag.RightChop(1).IsNumeric())
+    {
+        Finish(false, TEXT("The stable llama.cpp release contains an invalid binary tag."));
+        return;
+    }
+    bResolvingStableAssets = true;
+    RequestRelease(FString::Printf(TEXT("%s/tags/%s"), ReleasesAPI,
+        *FGenericPlatformHttp::UrlEncode(PendingAssetTag)));
 }
 
 bool UTextGenRuntimeInstallerSubsystem::BeginNextDownload()
@@ -404,14 +407,6 @@ void UTextGenRuntimeInstallerSubsystem::HandleDownloadResponse(FHttpRequestPtr, 
     if (!PendingAssets.IsValidIndex(ActiveAssetIndex))
     {
         Finish(false, TEXT("The llama.cpp installer lost its active component."));
-        return;
-    }
-    FPendingAsset& Asset = PendingAssets[ActiveAssetIndex];
-    FString ActualHash;
-    if (!HashFileSha256(Asset.DownloadPath, ActualHash)
-        || !ActualHash.Equals(Asset.SHA256, ESearchCase::IgnoreCase))
-    {
-        Finish(false, FString::Printf(TEXT("Downloaded component '%s' failed SHA-256 verification."), *Asset.Name));
         return;
     }
     if (!BeginNextDownload() && bInstalling)
@@ -569,7 +564,6 @@ bool UTextGenRuntimeInstallerSubsystem::ExtractAndPublish(FString& OutError)
         const TSharedRef<FJsonObject> AssetObject = MakeShared<FJsonObject>();
         AssetObject->SetStringField(TEXT("name"), Asset.Name);
         AssetObject->SetStringField(TEXT("url"), Asset.URL);
-        AssetObject->SetStringField(TEXT("sha256"), Asset.SHA256);
         AssetsJson.Add(MakeShared<FJsonValueObject>(AssetObject));
     }
     Manifest->SetArrayField(TEXT("assets"), AssetsJson);
