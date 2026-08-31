@@ -9,6 +9,11 @@ Managed llama.cpp support targets Win64 x64 with CUDA 13.3, CUDA 12.4, and Vulka
 
 No llama.cpp executable or accelerator DLL is stored in this repository. After the plugin is enabled and the Editor restarts, TextGen automatically prepares the configured official CUDA 13.3, CUDA 12.4, and Vulkan runtimes under the project `Saved` directory. Downloads stream directly to disk, reject unsafe archive paths, and publish atomically.
 
+Developers can also prepare every configured backend without PIE from
+`Project Settings > Plugins > TextGen > Runtime Installation`. Development and
+packaged defaults have separate actions and accept both stable `vX.Y.Z` and
+nightly/dev `bNNNNN` tags.
+
 The plugin depends on the sibling `ProcessRuntime` plugin for generic owned-process lifecycle management.
 
 ## Installation

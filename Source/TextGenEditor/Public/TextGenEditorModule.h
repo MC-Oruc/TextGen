@@ -16,6 +16,8 @@ public:
     virtual void StartupModule() override;
     virtual void ShutdownModule() override;
 
+    bool PrepareRuntimesForTag(const FString& Tag);
+
 private:
     void HandlePostEngineInit();
     void InitializeManagedLifecycle();
@@ -27,6 +29,8 @@ private:
     void StartManaged();
     void StopManaged();
     void InitializeContentBrowserIntegration();
+    void RegisterProjectSettingsCustomization();
+    void UnregisterProjectSettingsCustomization();
     void StartRuntimeBootstrap();
     void ContinueRuntimeBootstrap();
     void FinishRuntimeBootstrap(bool bSucceeded, const FText& Message);

@@ -9,7 +9,9 @@
 #include "HAL/PlatformProcess.h"
 #include "Misc/CoreDelegates.h"
 #include "Misc/Paths.h"
+#include "PropertyEditorModule.h"
 #include "TextGenContentBrowserDataSource.h"
+#include "TextGenProjectSettingsCustomization.h"
 #include "TextGenEditorSettings.h"
 #include "TextGen/TextGenLocalServiceSubsystem.h"
 #include "TextGen/TextGenProjectSettings.h"
@@ -59,6 +61,7 @@ namespace
 
 void FTextGenEditorModule::StartupModule()
 {
+    RegisterProjectSettingsCustomization();
     InitializeContentBrowserIntegration();
     if (GEngine)
     {
@@ -74,6 +77,7 @@ void FTextGenEditorModule::StartupModule()
 void FTextGenEditorModule::ShutdownModule()
 {
 	StopManaged();
+    UnregisterProjectSettingsCustomization();
     FCoreDelegates::GetOnPostEngineInit().Remove(PostEngineInitHandle);
     FWorldDelegates::OnPostWorldInitialization.Remove(WorldInitializedHandle);
     FWorldDelegates::OnWorldCleanup.Remove(WorldCleanupHandle);
@@ -106,6 +110,21 @@ void FTextGenEditorModule::HandlePostEngineInit()
     PostEngineInitHandle.Reset();
     InitializeManagedLifecycle();
     StartRuntimeBootstrap();
+}
+
+void FTextGenEditorModule::RegisterProjectSettingsCustomization()
+{
+    FPropertyEditorModule& PropertyEditor = FModuleManager::LoadModuleChecked<FPropertyEditorModule>(TEXT("PropertyEditor"));
+    PropertyEditor.RegisterCustomClassLayout(UTextGenProjectSettings::StaticClass()->GetFName(),
+        FOnGetDetailCustomizationInstance::CreateStatic(&FTextGenProjectSettingsCustomization::MakeInstance));
+}
+
+void FTextGenEditorModule::UnregisterProjectSettingsCustomization()
+{
+    if (FPropertyEditorModule* PropertyEditor = FModuleManager::GetModulePtr<FPropertyEditorModule>(TEXT("PropertyEditor")))
+    {
+        PropertyEditor->UnregisterCustomClassLayout(UTextGenProjectSettings::StaticClass()->GetFName());
+    }
 }
 
 void FTextGenEditorModule::InitializeManagedLifecycle()
@@ -217,19 +236,23 @@ void FTextGenEditorModule::StopManaged()
 
 void FTextGenEditorModule::StartRuntimeBootstrap()
 {
-    if (!GEngine || IsRunningCommandlet())
+    PrepareRuntimesForTag(GetDefault<UTextGenProjectSettings>()->DevelopmentDefaults.RuntimeTag);
+}
+
+bool FTextGenEditorModule::PrepareRuntimesForTag(const FString& Tag)
+{
+    if (!GEngine || IsRunningCommandlet() || Tag.IsEmpty())
     {
-        return;
+        return false;
     }
     UTextGenRuntimeInstallerSubsystem* Installer =
         GEngine->GetEngineSubsystem<UTextGenRuntimeInstallerSubsystem>();
-    const FTextGenLlamacppConfig& Config = GetDefault<UTextGenProjectSettings>()->DevelopmentDefaults;
-    if (!Installer || Config.RuntimeTag.IsEmpty())
+    if (!Installer || Installer->IsInstalling() || RuntimeInstallNotification.IsValid())
     {
-        return;
+        return false;
     }
 
-    RuntimeBootstrapTag = Config.RuntimeTag;
+    RuntimeBootstrapTag = Tag;
     RuntimeBootstrapBackends = {
         ETextGenLlamacppBackend::CUDA13,
         ETextGenLlamacppBackend::CUDA12,
@@ -243,7 +266,11 @@ void FTextGenEditorModule::StartRuntimeBootstrap()
         });
     if (!bRequiresPreparation)
     {
-        return;
+        FNotificationInfo NotificationInfo(LOCTEXT(
+            "RuntimeBootstrapAlreadyReady", "Configured llama.cpp runtimes are already installed."));
+        NotificationInfo.ExpireDuration = 4.0f;
+        FSlateNotificationManager::Get().AddNotification(NotificationInfo);
+        return true;
     }
 
     RuntimeProgressHandle = Installer->OnProgressNative().AddRaw(
@@ -257,6 +284,7 @@ void FTextGenEditorModule::StartRuntimeBootstrap()
     NotificationInfo.bUseThrobber = true;
     RuntimeInstallNotification = FSlateNotificationManager::Get().AddNotification(NotificationInfo);
     ContinueRuntimeBootstrap();
+    return true;
 }
 
 void FTextGenEditorModule::ContinueRuntimeBootstrap()

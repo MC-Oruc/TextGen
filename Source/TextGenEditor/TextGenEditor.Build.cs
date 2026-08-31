@@ -13,6 +13,7 @@ public class TextGenEditor : ModuleRules
                 "CoreUObject",
                 "DeveloperSettings",
                 "Engine",
+                "PropertyEditor",
                 "Slate",
                 "SlateCore",
                 "UnrealEd",
