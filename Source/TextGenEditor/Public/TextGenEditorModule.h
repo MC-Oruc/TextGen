@@ -1,12 +1,14 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/World.h"
 #include "Modules/ModuleManager.h"
 #include "TextGen/TextGenEnums.h"
 #include "UObject/StrongObjectPtr.h"
 
 class UTextGenContentBrowserDataSource;
 class SNotificationItem;
+struct FPropertyChangedEvent;
 
 class FTextGenEditorModule final : public IModuleInterface
 {
@@ -16,6 +18,14 @@ public:
 
 private:
     void HandlePostEngineInit();
+    void InitializeManagedLifecycle();
+    void HandleWorldInitialized(UWorld* World, const UWorld::InitializationValues InitializationValues);
+    void HandleWorldCleanup(UWorld* World, bool bSessionEnded, bool bCleanupResources);
+    void HandleEditorSettingsChanged(UObject* Object, FPropertyChangedEvent& PropertyChangedEvent);
+    void HandleProjectSettingsChanged(UObject* Object, FPropertyChangedEvent& PropertyChangedEvent);
+    void ReconcileManagedLifecycle();
+    void StartManaged();
+    void StopManaged();
     void InitializeContentBrowserIntegration();
     void StartRuntimeBootstrap();
     void ContinueRuntimeBootstrap();
@@ -26,6 +36,10 @@ private:
 
     TStrongObjectPtr<UTextGenContentBrowserDataSource> ContentBrowserDataSource;
     FDelegateHandle PostEngineInitHandle;
+    FDelegateHandle WorldInitializedHandle;
+    FDelegateHandle WorldCleanupHandle;
+    FDelegateHandle EditorSettingsChangedHandle;
+    FDelegateHandle ProjectSettingsChangedHandle;
     FDelegateHandle RuntimeProgressHandle;
     FDelegateHandle RuntimeCompleteHandle;
     TWeakPtr<SNotificationItem> RuntimeInstallNotification;
@@ -33,4 +47,5 @@ private:
     TArray<ETextGenLlamacppBackend> RuntimeBootstrapBackends;
     int32 RuntimeBootstrapBackendIndex = 0;
     ETextGenLlamacppBackend RuntimeBootstrapBackend = ETextGenLlamacppBackend::CUDA13;
+    int32 ActivePIEWorldCount = 0;
 };

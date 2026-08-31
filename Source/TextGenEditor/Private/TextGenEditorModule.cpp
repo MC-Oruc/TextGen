@@ -10,15 +10,25 @@
 #include "Misc/CoreDelegates.h"
 #include "Misc/Paths.h"
 #include "TextGenContentBrowserDataSource.h"
+#include "TextGenEditorSettings.h"
 #include "TextGen/TextGenLocalServiceSubsystem.h"
 #include "TextGen/TextGenProjectSettings.h"
 #include "TextGen/TextGenRuntimeInstallerSubsystem.h"
 #include "Widgets/Notifications/SNotificationList.h"
+#include "UObject/UnrealType.h"
 
 #define LOCTEXT_NAMESPACE "TextGenEditor"
 
 namespace
 {
+	ETextGenManagedLifecycleMode GetEffectiveEditorLifecycle()
+	{
+		const UTextGenEditorSettings* EditorSettings = GetDefault<UTextGenEditorSettings>();
+		return EditorSettings->bOverrideEditorLifecycle
+			? EditorSettings->EditorLifecycle
+			: GetDefault<UTextGenProjectSettings>()->DefaultEditorLifecycle;
+	}
+
     bool CanRevealFile(const FName, const FString& Filename, FText*)
     {
         return FPaths::FileExists(Filename);
@@ -63,7 +73,15 @@ void FTextGenEditorModule::StartupModule()
 
 void FTextGenEditorModule::ShutdownModule()
 {
+	StopManaged();
     FCoreDelegates::GetOnPostEngineInit().Remove(PostEngineInitHandle);
+    FWorldDelegates::OnPostWorldInitialization.Remove(WorldInitializedHandle);
+    FWorldDelegates::OnWorldCleanup.Remove(WorldCleanupHandle);
+    if (UObjectInitialized())
+    {
+        GetMutableDefault<UTextGenEditorSettings>()->OnSettingChanged().Remove(EditorSettingsChangedHandle);
+        GetMutableDefault<UTextGenProjectSettings>()->OnSettingChanged().Remove(ProjectSettingsChangedHandle);
+    }
     if (GEngine)
     {
         if (UTextGenRuntimeInstallerSubsystem* Installer =
@@ -86,7 +104,115 @@ void FTextGenEditorModule::HandlePostEngineInit()
 {
     FCoreDelegates::GetOnPostEngineInit().Remove(PostEngineInitHandle);
     PostEngineInitHandle.Reset();
+    InitializeManagedLifecycle();
     StartRuntimeBootstrap();
+}
+
+void FTextGenEditorModule::InitializeManagedLifecycle()
+{
+    if (!GEngine || IsRunningCommandlet())
+    {
+        return;
+    }
+    WorldInitializedHandle = FWorldDelegates::OnPostWorldInitialization.AddRaw(
+        this, &FTextGenEditorModule::HandleWorldInitialized);
+    WorldCleanupHandle = FWorldDelegates::OnWorldCleanup.AddRaw(
+        this, &FTextGenEditorModule::HandleWorldCleanup);
+    EditorSettingsChangedHandle = GetMutableDefault<UTextGenEditorSettings>()->OnSettingChanged().AddRaw(
+        this, &FTextGenEditorModule::HandleEditorSettingsChanged);
+    ProjectSettingsChangedHandle = GetMutableDefault<UTextGenProjectSettings>()->OnSettingChanged().AddRaw(
+        this, &FTextGenEditorModule::HandleProjectSettingsChanged);
+    ReconcileManagedLifecycle();
+}
+
+void FTextGenEditorModule::HandleProjectSettingsChanged(UObject*, FPropertyChangedEvent& PropertyChangedEvent)
+{
+    if (PropertyChangedEvent.GetPropertyName()
+        == GET_MEMBER_NAME_CHECKED(UTextGenProjectSettings, DefaultEditorLifecycle))
+    {
+        ReconcileManagedLifecycle();
+    }
+}
+
+void FTextGenEditorModule::HandleWorldInitialized(UWorld* World, const UWorld::InitializationValues)
+{
+    if (!World || World->WorldType != EWorldType::PIE)
+    {
+        return;
+    }
+    ++ActivePIEWorldCount;
+    if (ActivePIEWorldCount == 1
+        && GetEffectiveEditorLifecycle() == ETextGenManagedLifecycleMode::PIESession)
+    {
+        StartManaged();
+    }
+}
+
+void FTextGenEditorModule::HandleWorldCleanup(UWorld* World, const bool, const bool)
+{
+    if (!World || World->WorldType != EWorldType::PIE)
+    {
+        return;
+    }
+    ActivePIEWorldCount = FMath::Max(0, ActivePIEWorldCount - 1);
+    if (ActivePIEWorldCount == 0
+        && GetEffectiveEditorLifecycle() == ETextGenManagedLifecycleMode::PIESession)
+    {
+        StopManaged();
+    }
+}
+
+void FTextGenEditorModule::HandleEditorSettingsChanged(UObject*, FPropertyChangedEvent& PropertyChangedEvent)
+{
+    const FName PropertyName = PropertyChangedEvent.GetPropertyName();
+    if (PropertyName == GET_MEMBER_NAME_CHECKED(UTextGenEditorSettings, bOverrideEditorLifecycle)
+        || PropertyName == GET_MEMBER_NAME_CHECKED(UTextGenEditorSettings, EditorLifecycle))
+    {
+        ReconcileManagedLifecycle();
+    }
+}
+
+void FTextGenEditorModule::ReconcileManagedLifecycle()
+{
+    switch (GetEffectiveEditorLifecycle())
+    {
+    case ETextGenManagedLifecycleMode::EditorSession:
+        StartManaged();
+        break;
+    case ETextGenManagedLifecycleMode::PIESession:
+        if (ActivePIEWorldCount > 0)
+        {
+            StartManaged();
+        }
+        else
+        {
+            StopManaged();
+        }
+        break;
+    case ETextGenManagedLifecycleMode::Manual:
+        StopManaged();
+        break;
+    }
+}
+
+void FTextGenEditorModule::StartManaged()
+{
+    if (UTextGenLocalServiceSubsystem* Service = GEngine
+        ? GEngine->GetEngineSubsystem<UTextGenLocalServiceSubsystem>() : nullptr)
+    {
+        FString Error;
+        Service->StartManaged(GetDefault<UTextGenProjectSettings>()->DevelopmentDefaults, Error);
+    }
+}
+
+void FTextGenEditorModule::StopManaged()
+{
+    if (UTextGenLocalServiceSubsystem* Service = GEngine
+        ? GEngine->GetEngineSubsystem<UTextGenLocalServiceSubsystem>() : nullptr)
+    {
+        FString Error;
+        Service->StopManaged(Error);
+    }
 }
 
 void FTextGenEditorModule::StartRuntimeBootstrap()
@@ -234,17 +360,7 @@ void FTextGenEditorModule::FinishRuntimeBootstrap(const bool bSucceeded, const F
     }
     if (bSucceeded && GEngine)
     {
-        const UTextGenProjectSettings* Settings = GetDefault<UTextGenProjectSettings>();
-        if (Settings->EditorLifecycle != ETextGenManagedLifecycleMode::Manual
-            && !Settings->DevelopmentDefaults.bManagedDisabled)
-        {
-            if (UTextGenLocalServiceSubsystem* Service =
-                GEngine->GetEngineSubsystem<UTextGenLocalServiceSubsystem>())
-            {
-                FString StartError;
-                Service->StartManaged(Settings->DevelopmentDefaults, StartError);
-            }
-        }
+        ReconcileManagedLifecycle();
     }
     RuntimeInstallNotification.Reset();
 }

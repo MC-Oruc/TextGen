@@ -21,8 +21,8 @@ public:
     UPROPERTY(Config, EditAnywhere, Category = "Packaged Game")
     FTextGenLlamacppConfig PackagedDefaults;
 
-    UPROPERTY(Config, EditAnywhere, Category = "Editor")
-    ETextGenManagedLifecycleMode EditorLifecycle = ETextGenManagedLifecycleMode::EditorSession;
+    UPROPERTY(Config, EditAnywhere, Category = "Development")
+    ETextGenManagedLifecycleMode DefaultEditorLifecycle = ETextGenManagedLifecycleMode::Manual;
 
     UPROPERTY(Config, EditAnywhere, Category = "Conversation Cache")
     FString DefaultCacheDirectory = TEXT("Content/TextGen/ConversationCaches");

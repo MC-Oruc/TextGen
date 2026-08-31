@@ -1,13 +1,9 @@
 #include "TextGenModule.h"
 
 #include "Engine/Engine.h"
-#include "Engine/World.h"
 #include "HAL/IConsoleManager.h"
-#include "Misc/CoreDelegates.h"
 #include "TextGen/TextGenLocalServiceSubsystem.h"
 #include "TextGen/TextGenProjectSettings.h"
-#include "UObject/UObjectGlobals.h"
-#include "UObject/UnrealType.h"
 
 namespace
 {
@@ -19,11 +15,6 @@ namespace
 
 void FTextGenModule::StartupModule()
 {
-    PostEngineInitHandle = FCoreDelegates::GetOnPostEngineInit().AddRaw(this, &FTextGenModule::HandlePostEngineInit);
-    WorldInitializedHandle = FWorldDelegates::OnPostWorldInitialization.AddRaw(
-        this, &FTextGenModule::HandleWorldInitialized);
-    WorldCleanupHandle = FWorldDelegates::OnWorldCleanup.AddRaw(this, &FTextGenModule::HandleWorldCleanup);
-
     StartCommand = IConsoleManager::Get().RegisterConsoleCommand(
         TEXT("TextGen.ManagedProcess.Start"), TEXT("Start managed llama.cpp."),
         FConsoleCommandDelegate::CreateRaw(this, &FTextGenModule::StartManaged));
@@ -33,25 +24,11 @@ void FTextGenModule::StartupModule()
     RestartCommand = IConsoleManager::Get().RegisterConsoleCommand(
         TEXT("TextGen.ManagedProcess.Restart"), TEXT("Restart managed llama.cpp."),
         FConsoleCommandDelegate::CreateRaw(this, &FTextGenModule::RestartManaged));
-
-    if (GEngine)
-    {
-        HandlePostEngineInit();
-    }
 }
 
 void FTextGenModule::ShutdownModule()
 {
     StopManaged();
-    FCoreDelegates::GetOnPostEngineInit().Remove(PostEngineInitHandle);
-    FWorldDelegates::OnPostWorldInitialization.Remove(WorldInitializedHandle);
-    FWorldDelegates::OnWorldCleanup.Remove(WorldCleanupHandle);
-#if WITH_EDITOR
-    if (UObjectInitialized())
-    {
-        GetMutableDefault<UTextGenProjectSettings>()->OnSettingChanged().Remove(ProjectSettingsChangedHandle);
-    }
-#endif
     if (StartCommand)
     {
         IConsoleManager::Get().UnregisterConsoleObject(StartCommand);
@@ -66,56 +43,6 @@ void FTextGenModule::ShutdownModule()
     {
         IConsoleManager::Get().UnregisterConsoleObject(RestartCommand);
         RestartCommand = nullptr;
-    }
-}
-
-void FTextGenModule::HandlePostEngineInit()
-{
-    if (!GIsEditor || IsRunningCommandlet())
-    {
-        return;
-    }
-#if WITH_EDITOR
-    UTextGenProjectSettings* Settings = GetMutableDefault<UTextGenProjectSettings>();
-    if (!ProjectSettingsChangedHandle.IsValid())
-    {
-        ProjectSettingsChangedHandle = Settings->OnSettingChanged().AddRaw(
-            this, &FTextGenModule::HandleProjectSettingsChanged);
-    }
-#endif
-    if (GetDefault<UTextGenProjectSettings>()->EditorLifecycle == ETextGenManagedLifecycleMode::EditorSession)
-    {
-        StartManaged();
-    }
-}
-
-void FTextGenModule::HandleWorldInitialized(
-    UWorld* World,
-    const UWorld::InitializationValues)
-{
-    if (!World || World->WorldType != EWorldType::PIE)
-    {
-        return;
-    }
-    ++ActivePIEWorldCount;
-    if (ActivePIEWorldCount == 1
-        && GetDefault<UTextGenProjectSettings>()->EditorLifecycle == ETextGenManagedLifecycleMode::PIESession)
-    {
-        StartManaged();
-    }
-}
-
-void FTextGenModule::HandleWorldCleanup(UWorld* World, const bool, const bool)
-{
-    if (!World || World->WorldType != EWorldType::PIE)
-    {
-        return;
-    }
-    ActivePIEWorldCount = FMath::Max(0, ActivePIEWorldCount - 1);
-    if (ActivePIEWorldCount == 0
-        && GetDefault<UTextGenProjectSettings>()->EditorLifecycle == ETextGenManagedLifecycleMode::PIESession)
-    {
-        StopManaged();
     }
 }
 
@@ -145,36 +72,5 @@ void FTextGenModule::RestartManaged()
         Service->RestartManaged(GetDefault<UTextGenProjectSettings>()->DevelopmentDefaults, Error);
     }
 }
-
-#if WITH_EDITOR
-void FTextGenModule::HandleProjectSettingsChanged(UObject*, FPropertyChangedEvent& PropertyChangedEvent)
-{
-    if (PropertyChangedEvent.GetPropertyName()
-        != GET_MEMBER_NAME_CHECKED(UTextGenProjectSettings, EditorLifecycle))
-    {
-        return;
-    }
-
-    switch (GetDefault<UTextGenProjectSettings>()->EditorLifecycle)
-    {
-    case ETextGenManagedLifecycleMode::EditorSession:
-        StartManaged();
-        break;
-    case ETextGenManagedLifecycleMode::PIESession:
-        if (ActivePIEWorldCount > 0)
-        {
-            StartManaged();
-        }
-        else
-        {
-            StopManaged();
-        }
-        break;
-    case ETextGenManagedLifecycleMode::Manual:
-        StopManaged();
-        break;
-    }
-}
-#endif
 
 IMPLEMENT_MODULE(FTextGenModule, TextGen)
