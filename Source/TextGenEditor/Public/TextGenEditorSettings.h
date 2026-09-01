@@ -5,7 +5,7 @@
 #include "TextGen/TextGenEnums.h"
 #include "TextGenEditorSettings.generated.h"
 
-UCLASS(Config = EditorPerProjectUserSettings, DefaultConfig, meta = (DisplayName = "TextGen"))
+UCLASS(Config = EditorPerProjectUserSettings, meta = (DisplayName = "TextGen"))
 class TEXTGENEDITOR_API UTextGenEditorSettings final : public UDeveloperSettings
 {
 	GENERATED_BODY()
