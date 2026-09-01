@@ -1,5 +1,6 @@
 #include "TextGen/TextGenRuntimeInstallerSubsystem.h"
 
+#include "Async/Async.h"
 #include "Dom/JsonObject.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
@@ -60,6 +61,7 @@ void UTextGenRuntimeInstallerSubsystem::Deinitialize()
     }
     ActiveRequest.Reset();
     ActiveDownloadStream.Reset();
+    bInstalling = false;
     CleanupPendingDownloads();
     Super::Deinitialize();
 }
@@ -99,13 +101,27 @@ void UTextGenRuntimeInstallerSubsystem::ReconcileInstallerArtifacts(const ETextG
     }
 }
 
-void UTextGenRuntimeInstallerSubsystem::CleanupPendingDownloads()
+bool UTextGenRuntimeInstallerSubsystem::CleanupDownloadArtifacts(const ETextGenLlamacppBackend Backend)
 {
-    if (!PendingDownloadDirectory.IsEmpty())
+    const FString DownloadRoot = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("TextGen/RuntimeDownloads"),
+        TextGenLlamacppRuntimePaths::GetBackendDirectoryName(Backend));
+    return !IFileManager::Get().DirectoryExists(*DownloadRoot)
+        || IFileManager::Get().DeleteDirectory(*DownloadRoot, false, true);
+}
+
+bool UTextGenRuntimeInstallerSubsystem::CleanupPendingDownloads()
+{
+    if (PendingDownloadDirectory.IsEmpty())
     {
-        IFileManager::Get().DeleteDirectory(*PendingDownloadDirectory, false, true);
-        PendingDownloadDirectory.Reset();
+        return true;
     }
+    if (IFileManager::Get().DirectoryExists(*PendingDownloadDirectory)
+        && !IFileManager::Get().DeleteDirectory(*PendingDownloadDirectory, false, true))
+    {
+        return false;
+    }
+    PendingDownloadDirectory.Reset();
+    return true;
 }
 
 bool UTextGenRuntimeInstallerSubsystem::IsRuntimeInstalled(
@@ -172,6 +188,11 @@ bool UTextGenRuntimeInstallerSubsystem::BeginReleaseRequest(const FString& Endpo
 {
     if (bInstalling)
     {
+        return false;
+    }
+    if (!CleanupDownloadArtifacts(PendingBackend))
+    {
+        Finish(false, TEXT("Previous llama.cpp download files could not be removed."));
         return false;
     }
     ReconcileInstallerArtifacts(PendingBackend);
@@ -396,10 +417,25 @@ void UTextGenRuntimeInstallerSubsystem::HandleDownloadProgress(FHttpRequestPtr, 
     ProgressNative.Broadcast(CompletedBytes + static_cast<int64>(BytesReceived), TotalBytes);
 }
 
-void UTextGenRuntimeInstallerSubsystem::HandleDownloadResponse(FHttpRequestPtr, FHttpResponsePtr Response, const bool bSucceeded)
+void UTextGenRuntimeInstallerSubsystem::HandleDownloadResponse(FHttpRequestPtr, FHttpResponsePtr Response,
+    const bool bSucceeded)
 {
+    const int32 ResponseCode = Response.IsValid() ? Response->GetResponseCode() : 0;
+    ActiveRequest.Reset();
     ActiveDownloadStream.Reset();
-    if (!bSucceeded || !Response.IsValid() || Response->GetResponseCode() < 200 || Response->GetResponseCode() >= 300)
+    const TWeakObjectPtr<UTextGenRuntimeInstallerSubsystem> WeakThis(this);
+    AsyncTask(ENamedThreads::GameThread, [WeakThis, bSucceeded, ResponseCode]()
+    {
+        if (WeakThis.IsValid() && WeakThis->bInstalling)
+        {
+            WeakThis->ContinueAfterDownload(bSucceeded, ResponseCode);
+        }
+    });
+}
+
+void UTextGenRuntimeInstallerSubsystem::ContinueAfterDownload(const bool bSucceeded, const int32 ResponseCode)
+{
+    if (!bSucceeded || ResponseCode < 200 || ResponseCode >= 300)
     {
         Finish(false, TEXT("The llama.cpp runtime download failed."));
         return;
@@ -447,7 +483,7 @@ bool UTextGenRuntimeInstallerSubsystem::ExtractAndPublish(FString& OutError)
         zip_t* Archive = zip_open(ZipPathUtf8.Get(), ZIP_RDONLY, &ZipError);
         if (!Archive)
         {
-            OutError = TEXT("A verified llama.cpp component could not be opened.");
+            OutError = TEXT("A downloaded llama.cpp component could not be opened.");
             bValid = false;
             break;
         }
@@ -655,7 +691,7 @@ bool UTextGenRuntimeInstallerSubsystem::ExtractAndPublish(FString& OutError)
         {
             IFileManager::Get().Move(*Target, *TargetRollback, true, false, false, true);
         }
-        OutError = TEXT("The verified llama.cpp runtime could not be published atomically.");
+        OutError = TEXT("The downloaded llama.cpp runtime could not be published atomically.");
         return false;
     }
     IFileManager::Get().DeleteDirectory(*TargetRollback, false, true);
@@ -666,7 +702,7 @@ void UTextGenRuntimeInstallerSubsystem::Finish(const bool bSucceeded, const FStr
 {
     ActiveRequest.Reset();
     ActiveDownloadStream.Reset();
-    CleanupPendingDownloads();
+    const bool bDownloadsRemoved = CleanupPendingDownloads();
     bInstalling = false;
     const FText Message = bSucceeded
         ? NSLOCTEXT("TextGen", "RuntimeInstallSucceeded", "llama.cpp component installed successfully.")
@@ -678,6 +714,10 @@ void UTextGenRuntimeInstallerSubsystem::Finish(const bool bSucceeded, const FStr
     else
     {
         UE_LOG(LogTextGenAPI, Error, TEXT("%s"), *Message.ToString());
+    }
+    if (!bDownloadsRemoved)
+    {
+        UE_LOG(LogTextGenAPI, Error, TEXT("Temporary llama.cpp download files could not be removed."));
     }
     OnComplete.Broadcast(bSucceeded, bSucceeded ? PendingTag : FString(), PendingBackend, PendingComponent, Message);
     CompleteNative.Broadcast(bSucceeded, bSucceeded ? PendingTag : FString(), PendingBackend, PendingComponent, Message);

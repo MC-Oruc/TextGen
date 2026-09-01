@@ -65,12 +65,14 @@ private:
     bool BeginReleaseRequest(const FString& Endpoint);
     bool RequestRelease(const FString& Endpoint);
     void ReconcileInstallerArtifacts(ETextGenLlamacppBackend Backend);
-    void CleanupPendingDownloads();
+    bool CleanupDownloadArtifacts(ETextGenLlamacppBackend Backend);
+    bool CleanupPendingDownloads();
     void HandleReleaseResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded);
     void HandleStableAssetTagResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded);
     bool BeginNextDownload();
     void HandleDownloadProgress(FHttpRequestPtr Request, uint64 BytesSent, uint64 BytesReceived);
     void HandleDownloadResponse(FHttpRequestPtr Request, FHttpResponsePtr Response, bool bSucceeded);
+    void ContinueAfterDownload(bool bSucceeded, int32 ResponseCode);
     bool ExtractAndPublish(FString& OutError);
     void Finish(bool bSucceeded, const FString& Error = FString());
 

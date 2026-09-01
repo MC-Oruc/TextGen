@@ -704,7 +704,9 @@ bool UTextGenLocalServiceSubsystem::ResolveExecutable(const FTextGenLlamacppConf
         return true;
     }
 
-    OutError = FString::Printf(TEXT("No runnable CUDA 13, CUDA 12, or Vulkan llama.cpp runtime is installed for tag '%s'."), *OutTag);
+    OutError = FString::Printf(TEXT("No runnable CUDA 13, CUDA 12, or Vulkan llama.cpp runtime is installed for tag '%s'. "
+        "Install it from Project Settings > Plugins > TextGen > Runtime Installation > Prepare Development Runtimes. "
+        "Source: https://github.com/ggml-org/llama.cpp/releases."), *OutTag);
     return false;
 }
 
