@@ -31,6 +31,7 @@ public class TextGen : ModuleRules
             if (!Target.bBuildEditor && Target.ProjectFile != null)
             {
                 StageInstalledLlamacppRuntimes(Target);
+                StagePackagedModel(Target);
             }
         }
     }
@@ -64,6 +65,38 @@ public class TextGen : ModuleRules
                 RuntimeDependencies.Add(StagedFile, SourceFile, StagedFileType.NonUFS);
             }
         }
+    }
+
+    private void StagePackagedModel(ReadOnlyTargetRules Target)
+    {
+        ConfigHierarchy GameConfig = ConfigCache.ReadHierarchy(
+            ConfigHierarchyType.Game,
+            DirectoryReference.FromFile(Target.ProjectFile),
+            Target.Platform);
+        const string SettingsSection = "/Script/TextGen.TextGenProjectSettings";
+        string ModelPath = GameConfig.GetStructEntryForSetting(
+            SettingsSection, "PackagedDefaults", "ModelPath") ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(ModelPath))
+        {
+            return;
+        }
+
+        string CleanModelPath = ModelPath.Trim('\"', '\'').Trim();
+        string ProjectRoot = Target.ProjectFile.Directory.FullName;
+        string SourceModelPath = Path.IsPathRooted(CleanModelPath)
+            ? CleanModelPath
+            : Path.Combine(ProjectRoot, CleanModelPath);
+
+        if (!File.Exists(SourceModelPath))
+        {
+            throw new BuildException(
+                $"TextGen PackagedDefaults GGUF model was not found: {SourceModelPath}");
+        }
+
+        string RelativePath = CleanModelPath.Replace('/', Path.DirectorySeparatorChar)
+            .TrimStart(Path.DirectorySeparatorChar);
+        string StagedFile = Path.Combine("$(TargetOutputDir)", RelativePath);
+        RuntimeDependencies.Add(StagedFile, SourceModelPath, StagedFileType.NonUFS);
     }
 
     private static void ValidateRuntimeInventory(string RuntimeDirectory, string BackendDirectory, string RuntimeTag)
